@@ -11,10 +11,9 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 
-
 #define BUTTON_GPIO GPIO_NUM_16  // Button connected to GPIO 16
 #define ESP_INTR_FLAG_DEFAULT 0
-#define DEBOUNCE_DELAY 
+#define DEBOUNCE_DELAY 250000  // 250 ms debounce delay in microseconds
 
 volatile int64_t debounce_time = 0;
 
@@ -23,16 +22,14 @@ volatile int64_t react_time_end = 0;
 
 SemaphoreHandle_t serialMutex;
 
-
 TaskHandle_t thandle_waitForGameStart = NULL;
 TaskHandle_t thandle_start_game = NULL;
 TaskHandle_t thandle_too_early = NULL;
 TaskHandle_t thandle_reacted = NULL;
 
-void IRAM_ATTR start_game_isr (void* arg);
-void IRAM_ATTR too_early_isr (void* arg);
-void IRAM_ATTR reacted_isr (void* arg);
-
+void IRAM_ATTR start_game_isr(void* arg);
+void IRAM_ATTR too_early_isr(void* arg);
+void IRAM_ATTR reacted_isr(void* arg);
 
 int advert_index = 0;
 const char *adverts[] = {
@@ -43,10 +40,10 @@ const char *adverts[] = {
     "Get ready to push your limits! Only the sharpest minds and fastest fingers will dominate this test!"
 };
 
-void waitForGameStart(void* not_used){
+void waitForGameStart(void* not_used) {
     /*wait for a player to press the button to start the game*/
-    while(1){
-        vTaskDelay(pdMS_TO_TICKS(2000));// send a mesage evry 2 seconds 
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(2000)); // send a message every 2 seconds
         xSemaphoreTake(serialMutex, portMAX_DELAY);
         printf("%s\n", adverts[advert_index]);
         advert_index = (advert_index + 1) % (sizeof(adverts) / sizeof(adverts[0]));
@@ -54,107 +51,116 @@ void waitForGameStart(void* not_used){
     }
 }
 
-void return_to_start(){
+void return_to_start() {
     /*this function brings everything back to the initial state*/
 
-    //register the start_game_isr 
+    // register the start_game_isr
     gpio_isr_handler_add(BUTTON_GPIO, start_game_isr, NULL);  // Setup and test button
 
-    //enable the waitForGameStart task
-    if (thandle_waitForGameStart == NULL){
+    // enable the waitForGameStart task
+    if (thandle_waitForGameStart == NULL) {
         xTaskCreate(
             waitForGameStart,
             "waitForGameStart",
-            2048,        
-            NULL ,
+            2048,
+            NULL,
             1,
-            &thandle_waitForGameStart    // Task handle
+            &thandle_waitForGameStart // Task handle
         );
     } else {
         vTaskResume(thandle_waitForGameStart);
     }
 }
 
+void reacted(void* not_used) {
+    /*user pressed the button after the measurement was started*/
 
-void reacted (void* not_used){
-    /*user pressed the button after the mesurment was started*/
-
-    //calc Time
+    // calc Time in microseconds
     int react_time = (react_time_end - react_time_start);
+
+    // convert to seconds as float
+    float react_time_sec = react_time / 1000000.0f;
 
     // get mutex
     xSemaphoreTake(serialMutex, portMAX_DELAY);
 
-    //print Time 
-    printf("your reaction time was %d micro s\n", react_time);
+    printf("Your reaction time was %.6f seconds\n", react_time_sec);
     printf("\n\n\n");
-    
-    // relaes mutex done printing
+
+    // release mutex done printing
     xSemaphoreGive(serialMutex);
 
-    //reset to start
+    // reset to start
     return_to_start();
 
-    //delete this task
+    // delete this task
     vTaskDelete(thandle_reacted);
     thandle_reacted = NULL;
-
 }
 
-void IRAM_ATTR reacted_isr (void* arg){
+
+void IRAM_ATTR reacted_isr(void* arg) {
     /*init the reacted task*/
 
-    //save Time
+    int64_t now = esp_timer_get_time();
+    if (now - debounce_time < DEBOUNCE_DELAY) return;
+    debounce_time = now;
+
+    // save Time
     react_time_end = esp_timer_get_time();
 
     xTaskCreate(
-        reacted,      // Function name of the task
-        "reacted",   // Name of the task (e.g. for debugging)
-        2048,        // Stack size (bytes)
-        NULL ,        // Parameter to pass
-        1,           // Task priority
-        &thandle_reacted    // Task handle
+        reacted,    // Function name of the task
+        "reacted",  // Name of the task (e.g. for debugging)
+        2048,       // Stack size (bytes)
+        NULL,
+        1,          // Task priority
+        &thandle_reacted // Task handle
     );
 
     gpio_isr_handler_remove(BUTTON_GPIO);
 }
 
-
-void too_early (void* not_used){
-    /*player pressed to early*/
+void too_early(void* not_used) {
+    /*player pressed too early*/
 
     // get mutex
     xSemaphoreTake(serialMutex, portMAX_DELAY);
 
-    //you suck
-    printf("you pressed to early, you suck\n");
+    // you suck message
+    printf("you pressed too early, you suck\n");
 
-    //delete the start_measurment task
-    if (thandle_start_game  == NULL){
-    printf("ERROR too erly: start measurment task is NULL");
-    }else {
-        vTaskDelete(thandle_start_game );
-        thandle_start_game  = NULL;
+    // delete the start_measurement task
+    if (thandle_start_game == NULL) {
+        printf("ERROR too early: start measurement task is NULL");
+    } else {
+        vTaskDelete(thandle_start_game);
+        thandle_start_game = NULL;
     }
 
-    // relaes mutex done printing
+    // release mutex done printing
     xSemaphoreGive(serialMutex);
 
     // return to start
     return_to_start();
 
-    //delete this task
+    // delete this task
     vTaskDelete(thandle_too_early);
     thandle_too_early = NULL;
 }
 
-void IRAM_ATTR too_early_isr (void* arg) {
-    /*init the too erly task*/
+void IRAM_ATTR too_early_isr(void* arg) {
+    /*init the too early task*/
+
+    int64_t now = esp_timer_get_time();
+    if (now - debounce_time < DEBOUNCE_DELAY) return;
+    debounce_time = now;
+
     xTaskCreate(
         too_early,
         "too_early",
         2048,
-        NULL ,
+        NULL,
         1,
         &thandle_too_early
     );
@@ -162,33 +168,27 @@ void IRAM_ATTR too_early_isr (void* arg) {
     gpio_isr_handler_remove(BUTTON_GPIO);
 }
 
-
-
-
-
-void start_game (void* not_used) {
+void start_game(void* not_used) {
     /*inits the game*/
 
     // get mutex
     xSemaphoreTake(serialMutex, portMAX_DELAY);
 
-    //disable waitForGameStart 
-    // because the mutex is taken already we know that wait for game is allowed to be interupted
+    // disable waitForGameStart 
+    // because the mutex is taken already we know that wait for game is allowed to be interrupted
     vTaskSuspend(thandle_waitForGameStart);
 
-
-    //notivy player game starts
+    // notify player game starts
     printf("\n");
     printf("----------------- Game start -----------------\n");
 
-    // relaes mutex done printing
+    // release mutex done printing
     xSemaphoreGive(serialMutex);
 
-    //register interupt handler for early press
+    // register interrupt handler for early press
     gpio_isr_handler_add(BUTTON_GPIO, too_early_isr, NULL);
 
-    
-    //choose wait time 
+    // choose wait time 
     long base_delay = 3000; // 3 seconds base delay
     uint32_t rand = esp_random() % (10 * 1000);
     long delay_time = base_delay + rand;
@@ -199,34 +199,39 @@ void start_game (void* not_used) {
     // get mutex
     xSemaphoreTake(serialMutex, portMAX_DELAY);
 
-    //unregister the too erly interupt handler
+    // unregister the too early interrupt handler
     gpio_isr_handler_remove(BUTTON_GPIO);
 
-    //rigister react interupt handler
+    // register react interrupt handler
     gpio_isr_handler_add(BUTTON_GPIO, reacted_isr, NULL);
 
-    //notify the user 
+    // notify the user 
     printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
     printf("!!!!!!!!!       Press      !!!!!!!!!\n");
     printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 
     xSemaphoreGive(serialMutex);
 
-    //start measurment
+    // start measurement
     react_time_start = esp_timer_get_time();
 
-    //delete self 
+    // delete self 
     vTaskDelete(thandle_start_game);
     thandle_start_game = NULL;
 }
 
-void IRAM_ATTR start_game_isr (void* arg){
+void IRAM_ATTR start_game_isr(void* arg) {
     /*init the start game task*/
+
+    int64_t now = esp_timer_get_time();
+    if (now - debounce_time < DEBOUNCE_DELAY) return;
+    debounce_time = now;
+
     xTaskCreate(
         start_game,
         "start_game",
         2048,
-        NULL ,
+        NULL,
         1,
         &thandle_start_game
     );
@@ -234,18 +239,13 @@ void IRAM_ATTR start_game_isr (void* arg){
     gpio_isr_handler_remove(BUTTON_GPIO);
 }
 
-
-
-
-
-volatile int  pressed = 0;
-// Function to handle the button press
+volatile int pressed = 0;
+// Function to handle the button press (not used in your current flow)
 void IRAM_ATTR button_isr_handler(void* arg) {
     pressed = 1;
     // Perform necessary actions
     gpio_isr_handler_remove(BUTTON_GPIO);
 }
-
 
 extern "C" void app_main(void) {
     // Setup
@@ -265,5 +265,3 @@ extern "C" void app_main(void) {
 
     return_to_start();
 }
-
-
