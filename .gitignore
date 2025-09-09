@@ -1,0 +1,36 @@
+# ESP-IDF Build and Output Files
+/build/
+/sdkconfig.old
+/sdkconfig.defaults
+/sdkconfig.ci
+*.bin
+*.elf
+*.map
+*.json
+*.log
+
+# CMake and Ninja build system
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+build.ninja
+compile_commands.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDF-related intermediate directories
+*.flash_args
+*.in
+*.env
+*.S
+
+# VS Code settings (if used)
+.vscode/
+
+# Backup files
+*~
+*.swp
+*.bak
+.DS_Store
